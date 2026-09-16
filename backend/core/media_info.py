@@ -52,7 +52,7 @@ def detect_quality(file_path: str) -> QualityTier:
             height = stream.get("height", 0)
             if height >= 2160:
                 return QualityTier.UHD
-            if height >= 720:
+            if height > 720:
                 return QualityTier.HD
             return QualityTier.SD
     return QualityTier.SD
