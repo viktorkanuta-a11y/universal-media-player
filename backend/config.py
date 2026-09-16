@@ -11,7 +11,7 @@ class Settings:
     FREE_IMAGES_COUNT: int = 50                 # 50 изображений
 
     # === Ограничения по качеству ===
-    FREE_MAX_QUALITY: str = "hd"                # до 1080p
+    FREE_MAX_QUALITY: str = "sd"                # до 720p включительно
     PRO_MAX_QUALITY: str = "uhd"                # до 4K
 
     # === Цены подписок ===
