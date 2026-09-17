@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'replay_home.dart';
 import 'splash_screen.dart';
 
 void main() {
@@ -14,25 +15,8 @@ class RePlayApp extends StatelessWidget {
     return MaterialApp(
       title: 'RePlay',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: Colors.indigo),
-      home: const SplashScreen(next: HomeScreen()),
-    );
-  }
-}
-
-class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('RePlay')),
-      body: const Center(
-        child: Text(
-          'RePlay работает',
-          style: TextStyle(fontSize: 24),
-        ),
-      ),
+      theme: ThemeData(colorSchemeSeed: const Color(0xFFE8664A)),
+      home: const SplashScreen(next: ReplayHome()),
     );
   }
 }
