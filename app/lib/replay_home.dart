@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'feedback_button.dart';
+import 'upscale.dart';
 
 /// Главное окно RePlay по макету Qwen (пока без обработки).
 class ReplayHome extends StatefulWidget {
@@ -107,7 +108,7 @@ class _ReplayHomeState extends State<ReplayHome> {
           fit: BoxFit.scaleDown,
           child: InkWell(
             borderRadius: BorderRadius.circular(16),
-            onTap: () => _soon('Выбор картинки подключим на следующих шагах'),
+            onTap: () => pickImage(context),
             child: CustomPaint(
               painter: _DashedBorderPainter(color: _coral),
               child: const SizedBox(
@@ -161,8 +162,7 @@ class _ReplayHomeState extends State<ReplayHome> {
                 backgroundColor: _coral,
                 shape: const StadiumBorder(),
               ),
-              onPressed: () =>
-                  _soon('Движок увеличения подключим на следующих шагах'),
+              onPressed: () => runUpscale(context, _width.text, _height.text, _quality),
               child: const Text('Запустить', style: TextStyle(fontSize: 18)),
             ),
           ),
