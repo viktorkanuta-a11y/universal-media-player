@@ -9,6 +9,18 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  url_launcher: ^6.2.0
+
+dev_dependencies:
+  flutter_launcher_icons: ^0.14.0
 
 flutter:
   uses-material-design: true
+
+flutter_launcher_icons:
+  android: false
+  ios: false
+  image_path: "assets/icon.png"
+  macos:
+    generate: true
+    image_path: "assets/icon.png"
