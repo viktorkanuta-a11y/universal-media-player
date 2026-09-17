@@ -1,0 +1,41 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/build-macos.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create macOS platform files
+        run: flutter create --platforms=macos --project-name replay .
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Build
+        run: flutter build macos --release
+
+      - name: Pack app
+        run: |
+          cd build/macos/Build/Products/Release
+          ditto -c -k --sequesterRsrc --keepParent replay.app RePlay-macos.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RePlay-macos
+          path: app/build/macos/Build/Products/Release/RePlay-macos.zip
