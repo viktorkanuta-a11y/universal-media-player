@@ -27,8 +27,26 @@ jobs:
       - name: Get packages
         run: flutter pub get
 
+      - name: App icon
+        run: dart run flutter_launcher_icons
+
+      - name: Turn off sandbox
+        run: /usr/libexec/PlistBuddy -c "Set :com.apple.security.app-sandbox false" macos/Runner/Release.entitlements
+
       - name: Build
         run: flutter build macos --release
+
+      - name: Add engine
+        run: |
+          APP=build/macos/Build/Products/Release/replay.app
+          curl -sL -o esr.zip https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip
+          mkdir -p esr && unzip -q esr.zip -d esr
+          mkdir -p "$APP/Contents/Resources/engine"
+          cp esr/realesrgan-ncnn-vulkan "$APP/Contents/Resources/engine/"
+          cp -R esr/models "$APP/Contents/Resources/engine/"
+          chmod +x "$APP/Contents/Resources/engine/realesrgan-ncnn-vulkan"
+          codesign --force -s - "$APP/Contents/Resources/engine/realesrgan-ncnn-vulkan"
+          codesign --force --deep -s - "$APP"
 
       - name: Pack app
         run: |
