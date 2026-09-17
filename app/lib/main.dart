@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'splash_screen.dart';
+
 void main() {
   runApp(const RePlayApp());
 }
@@ -13,7 +15,7 @@ class RePlayApp extends StatelessWidget {
       title: 'RePlay',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: Colors.indigo),
-      home: const HomeScreen(),
+      home: const SplashScreen(next: HomeScreen()),
     );
   }
 }
