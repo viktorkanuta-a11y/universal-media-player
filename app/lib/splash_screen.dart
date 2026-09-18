@@ -1,9 +1,7 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 
 /// Приветственный экран для Марины.
-/// Через 6 секунд или по нажатию переходит в программу.
+/// Висит, пока не нажмёшь.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key, required this.next});
 
@@ -16,7 +14,6 @@ class SplashScreen extends StatefulWidget {
 class _SplashScreenState extends State<SplashScreen> {
   bool _visible = false;
   bool _left = false;
-  Timer? _timer;
 
   @override
   void initState() {
@@ -24,13 +21,11 @@ class _SplashScreenState extends State<SplashScreen> {
     Future.delayed(const Duration(milliseconds: 200), () {
       if (mounted) setState(() => _visible = true);
     });
-    _timer = Timer(const Duration(seconds: 6), _goNext);
   }
 
   void _goNext() {
     if (_left || !mounted) return;
     _left = true;
-    _timer?.cancel();
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 800),
@@ -39,12 +34,6 @@ class _SplashScreenState extends State<SplashScreen> {
             FadeTransition(opacity: animation, child: child),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
   }
 
   @override
