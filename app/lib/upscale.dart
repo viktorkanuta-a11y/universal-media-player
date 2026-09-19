@@ -56,13 +56,21 @@ Future<void> runUpscale(
   final status = ValueNotifier<String>('Готовлю…');
   final started = DateTime.now();
   final ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-    status.value = status.value; // перерисовка времени
+    status.value = status.value;
   });
+
+  // окошко прогресса закрывается ровно один раз
+  var dialogOpen = true;
+  void closeDialog() {
+    if (!dialogOpen) return;
+    dialogOpen = false;
+    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+  }
 
   showDialog<void>(
     context: context,
     barrierDismissible: false,
-    builder: (dialogContext) => AlertDialog(
+    builder: (_) => AlertDialog(
       content: ValueListenableBuilder<String>(
         valueListenable: status,
         builder: (_, text, __) {
@@ -82,7 +90,7 @@ Future<void> runUpscale(
         TextButton(
           onPressed: () {
             stopUpscale();
-            Navigator.of(dialogContext).pop();
+            closeDialog();
           },
           child: const Text('Отмена'),
         ),
@@ -105,8 +113,6 @@ Future<void> runUpscale(
     if (k > 4) {
       status.value = 'Проход 1 из 2 · нужен размер $targetW×$targetH px';
       current = await _engineRun(current, '${temp.path}/p1.png', status, 1, 2);
-      // ужимаем до четверти цели, чтобы второй проход дал ровно цель,
-      // а не картинку в 16 раз
       current = await _resize(current, '${temp.path}/p1_fit.png',
           (targetW / 4).round(), (targetH / 4).round());
       status.value = 'Проход 2 из 2';
@@ -124,17 +130,23 @@ Future<void> runUpscale(
       await File(current).copy(output);
     }
 
+    closeDialog();
     if (!context.mounted) return;
-    Navigator.of(context).pop();
     await _done(context, output, targetW, targetH, dpi);
   } catch (e) {
-    if (!context.mounted) return;
-    Navigator.of(context).pop();
-    if (!_canceled) _message(context, 'Ошибка: $e');
+    closeDialog();
+    // недописанный файл не оставляем
+    try {
+      final f = File(output);
+      if (await f.exists()) await f.delete();
+    } catch (_) {}
+    if (_canceled || !context.mounted) return;
+    await _error(context, '$e'.replaceFirst('Exception: ', ''));
   } finally {
     ticker.cancel();
     _keepAwake(false);
     _engine = null;
+    closeDialog();
     if (temp != null && await temp.exists()) {
       await temp.delete(recursive: true);
     }
@@ -154,8 +166,8 @@ double _scale((int, int) src, String w, String h, int dpi) {
     final k = (mh * 39.3701 * dpi) / src.$2;
     if (k > need) need = k;
   }
-  if (need <= 0) return 4; // поля пустые — просто x4
-  if (need > 16) return 16; // дальше движок не тянет
+  if (need <= 0) return 4;
+  if (need > 16) return 16;
   return need;
 }
 
@@ -175,11 +187,16 @@ Future<String> _engineRun(
   final process = await Process.start(exe, [
     '-i', input, '-o', output,
     '-n', 'realesrgan-x4plus', '-s', '4', '-m', '$dir/models',
+    '-t', '64', // маленькими кусками — видеокарта не захлёбывается
   ]);
   _engine = process;
 
+  final log = StringBuffer();
   final percent = RegExp(r'(\d+[.,]?\d*)%');
-  process.stderr.transform(const SystemEncoding().decoder).listen((chunk) {
+  final reading = process.stderr
+      .transform(const SystemEncoding().decoder)
+      .forEach((chunk) {
+    log.write(chunk);
     final match = percent.allMatches(chunk).lastOrNull;
     if (match != null) {
       status.value = 'Проход $pass из $total · ${match.group(1)}%';
@@ -187,10 +204,16 @@ Future<String> _engineRun(
   });
 
   final code = await process.exitCode;
+  await reading;
   _engine = null;
   if (_canceled) throw Exception('отменено');
+  if (code != 0 || log.toString().toLowerCase().contains('failed')) {
+    throw Exception(
+        'Видеокарта не справилась, движок остановился (код $code). '
+        'Попробуй размер поменьше.');
+  }
   if (!await File(output).exists()) {
-    throw Exception('движок не создал файл (код $code)');
+    throw Exception('Движок не создал файл (код $code)');
   }
   return output;
 }
@@ -214,7 +237,7 @@ Future<String> _resize(String input, String output, int w, int h) async {
   final frame = await codec.getNextFrame();
   final data = await frame.image.toByteData(format: ui.ImageByteFormat.png);
   frame.image.dispose();
-  if (data == null) throw Exception('не получилось подогнать размер');
+  if (data == null) throw Exception('Не получилось подогнать размер');
   await File(output).writeAsBytes(data.buffer.asUint8List());
   return output;
 }
@@ -255,6 +278,23 @@ Future<void> _done(
   );
 }
 
+/// Окно ошибки — не исчезает само
+Future<void> _error(BuildContext context, String text) async {
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Не получилось'),
+      content: Text(text),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('Понятно'),
+        ),
+      ],
+    ),
+  );
+}
+
 void _showInFolder(String path) {
   if (Platform.isWindows) {
     Process.run('explorer', ['/select,${path.replaceAll('/', r'\')}']);
@@ -279,10 +319,9 @@ void _keepAwake(bool on) {
       final kernel32 = DynamicLibrary.open('kernel32.dll');
       final setState = kernel32.lookupFunction<Uint32 Function(Uint32),
           int Function(int)>('SetThreadExecutionState');
-      // ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
       setState(on ? 0x80000003 : 0x80000000);
     }
   } catch (_) {
-    // не вышло — работаем дальше, это не ошибка обработки
+    // не вышло — работаем дальше
   }
 }
