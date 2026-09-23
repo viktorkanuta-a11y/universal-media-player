@@ -8,6 +8,9 @@ on:
       - '.github/workflows/build-windows.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -22,18 +25,43 @@ jobs:
         with:
           channel: stable
 
+      - name: Version from pubspec
+        run: |
+          $m = Select-String -Path pubspec.yaml -Pattern '^version:\s*([0-9]+\.[0-9]+\.[0-9]+)' | Select-Object -First 1
+          if (-not $m) { throw 'version not found in pubspec.yaml' }
+          $ver = $m.Matches[0].Groups[1].Value
+          Add-Content -Path $env:GITHUB_ENV -Value "VER=$ver"
+          Write-Host "version = $ver"
+
       - name: Create Windows platform files
         run: flutter create --platforms=windows --project-name replay .
 
       - name: Get packages
         run: flutter pub get
 
+      - name: App icon
+        run: dart run flutter_launcher_icons -f icons-windows.yaml
+
+      - name: Rename app to RePlay
+        run: |
+          $cm = 'windows/CMakeLists.txt'
+          (Get-Content $cm -Raw) -replace 'set\(BINARY_NAME "replay"\)', 'set(BINARY_NAME "RePlay")' | Set-Content $cm -NoNewline
+          if (-not (Select-String -Path $cm -Pattern 'BINARY_NAME "RePlay"' -Quiet)) { throw 'BINARY_NAME not replaced' }
+          $mc = 'windows/runner/main.cpp'
+          (Get-Content $mc -Raw) -replace 'L"replay"', 'L"RePlay"' | Set-Content $mc -NoNewline
+          if (-not (Select-String -Path $mc -Pattern 'L"RePlay"' -Quiet)) { throw 'window title not replaced' }
+          $rc = 'windows/runner/Runner.rc'
+          if (Test-Path $rc) {
+            (Get-Content $rc -Raw) -replace '"replay"', '"RePlay"' -replace '"replay\.exe"', '"RePlay.exe"' | Set-Content $rc -NoNewline
+          }
+
       - name: Build
         run: flutter build windows --release
 
       - name: Add engine
         run: |
-          $exe = Get-ChildItem -Path build/windows -Recurse -Filter replay.exe | Select-Object -First 1
+          $exe = Get-ChildItem -Path build/windows -Recurse -Filter RePlay.exe | Select-Object -First 1
+          if (-not $exe) { throw 'RePlay.exe not found after build' }
           $release = $exe.Directory.FullName
           Add-Content -Path $env:GITHUB_ENV -Value "RELEASE=$release"
           Invoke-WebRequest -Uri https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-windows.zip -OutFile esr.zip
@@ -43,9 +71,21 @@ jobs:
           Copy-Item "$src/*" "$release/engine/" -Recurse -Force
 
       - name: Pack app
-        run: Compress-Archive -Path "$env:RELEASE/*" -DestinationPath RePlay-windows.zip -Force
+        run: |
+          $name = "RePlay-$env:VER-windows"
+          $parent = Split-Path $env:RELEASE -Parent
+          $dir = Join-Path $parent $name
+          Rename-Item -Path $env:RELEASE -NewName $name
+          Compress-Archive -Path $dir -DestinationPath "$name.zip" -Force
+          Write-Host "packed $name.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: RePlay-windows
-          path: app/RePlay-windows.zip
+          name: RePlay-${{ env.VER }}-windows
+          path: app/RePlay-${{ env.VER }}-windows.zip
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VER }}
+          name: RePlay ${{ env.VER }}
+          files: app/RePlay-${{ env.VER }}-windows.zip
