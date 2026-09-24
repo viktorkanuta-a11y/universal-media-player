@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'feedback_button.dart';
+import 'updater.dart';
 import 'upscale.dart';
 
 /// Главное окно RePlay по макету Qwen (пока без обработки).
@@ -28,6 +29,15 @@ class _ReplayHomeState extends State<ReplayHome> {
   double _quality = 0.6;
   final TextEditingController _width = TextEditingController();
   final TextEditingController _height = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Проверка обновления — после того как окно показалось
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) checkForUpdate(context);
+    });
+  }
 
   @override
   void dispose() {
@@ -77,7 +87,12 @@ class _ReplayHomeState extends State<ReplayHome> {
               fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: 40),
+          const SizedBox(height: 4),
+          const Text(
+            'версия $appVersion',
+            style: TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+          const SizedBox(height: 36),
           for (int i = 0; i < _sections.length; i++) ...[
             _SectionButton(
               label: _sections[i],

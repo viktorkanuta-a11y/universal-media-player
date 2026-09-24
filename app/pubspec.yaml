@@ -1,7 +1,7 @@
 name: replay
 description: RePlay - плеер и улучшение изображений.
 publish_to: 'none'
-version: 0.2.0+1
+version: 0.3.0+1
 
 environment:
   sdk: ^3.5.0
