@@ -8,6 +8,9 @@ on:
       - '.github/workflows/build-macos.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -21,6 +24,13 @@ jobs:
         with:
           channel: stable
 
+      - name: Version from pubspec
+        run: |
+          VER=$(grep -E '^version:' pubspec.yaml | head -1 | sed -E 's/^version:[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+          if [ -z "$VER" ]; then echo 'version not found in pubspec.yaml'; exit 1; fi
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          echo "version = $VER"
+
       - name: Create macOS platform files
         run: flutter create --platforms=macos --project-name replay .
 
@@ -33,12 +43,19 @@ jobs:
       - name: Turn off sandbox
         run: /usr/libexec/PlistBuddy -c "Set :com.apple.security.app-sandbox false" macos/Runner/Release.entitlements
 
+      - name: Rename app to RePlay
+        run: |
+          CFG=macos/Runner/Configs/AppInfo.xcconfig
+          sed -i '' 's/^PRODUCT_NAME = .*/PRODUCT_NAME = RePlay/' "$CFG"
+          grep -q '^PRODUCT_NAME = RePlay$' "$CFG" || { echo 'PRODUCT_NAME not replaced'; exit 1; }
+
       - name: Build
-        run: flutter build macos --release
+        run: flutter build macos --release --dart-define=APP_VERSION=$VER
 
       - name: Add engine
         run: |
-          APP=build/macos/Build/Products/Release/replay.app
+          APP=build/macos/Build/Products/Release/RePlay.app
+          test -d "$APP" || { echo 'RePlay.app not found after build'; exit 1; }
           curl -sL -o esr.zip https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip
           mkdir -p esr && unzip -q esr.zip -d esr
           mkdir -p "$APP/Contents/Resources/engine"
@@ -51,9 +68,28 @@ jobs:
       - name: Pack app
         run: |
           cd build/macos/Build/Products/Release
-          ditto -c -k --sequesterRsrc --keepParent replay.app RePlay-macos.zip
+          ditto -c -k --sequesterRsrc --keepParent RePlay.app "RePlay-$VER-macos.zip"
+          mv "RePlay-$VER-macos.zip" "$GITHUB_WORKSPACE/app/"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: RePlay-macos
-          path: app/build/macos/Build/Products/Release/RePlay-macos.zip
+          name: RePlay-${{ env.VER }}-macos
+          path: app/RePlay-${{ env.VER }}-macos.zip
+
+      # Windows-сборка публикует тот же релиз параллельно:
+      # кто первый — создаёт, второй докладывает файл
+      - name: Publish to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v$VER"
+          FILE="RePlay-$VER-macos.zip"
+          for i in $(seq 1 30); do
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" "$FILE" --clobber && exit 0
+            else
+              gh release create "$TAG" "$FILE" --title "RePlay $VER" --target "$GITHUB_SHA" && exit 0
+            fi
+            sleep 10
+          done
+          echo 'release not published'; exit 1

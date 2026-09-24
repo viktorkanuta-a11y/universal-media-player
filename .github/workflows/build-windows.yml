@@ -56,7 +56,7 @@ jobs:
           }
 
       - name: Build
-        run: flutter build windows --release
+        run: flutter build windows --release --dart-define=APP_VERSION=$env:VER
 
       - name: Add engine
         run: |
