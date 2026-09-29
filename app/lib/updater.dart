@@ -194,16 +194,25 @@ Future<void> _startHelper(String zip, String temp) async {
     final script = File('$temp\\update.ps1');
     // BOM — чтобы PowerShell 5 правильно прочитал русские пути
     await script.writeAsBytes([0xEF, 0xBB, 0xBF, ...utf8.encode(_windowsScript)]);
-    await Process.start(
+    final psArgs = [
       'powershell.exe',
-      [
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
-        '-File', script.path,
-        '-AppPid', '$pid',
-        '-Zip', zip,
-        '-AppDir', appDir,
-        '-Temp', temp,
-      ],
+      '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+      '-File', script.path,
+      '-AppPid', '$pid',
+      '-Zip', zip,
+      '-AppDir', appDir,
+      '-Temp', temp,
+    ];
+    // Запись «программа дошла до запуска» — по ней видно, что было, если
+    // update.log не появится: запуск не случился или PowerShell упал сразу.
+    await File('$temp\\launch.log').writeAsString(
+      '${DateTime.now()} cmd /c start /min ${psArgs.join(' ')}\n',
+    );
+    // Через cmd /c start: Windows сам отвязывает PowerShell от программы,
+    // и он не умирает вместе с ней. Заголовок «RePlay Update» нужен start.
+    await Process.start(
+      'cmd.exe',
+      ['/c', 'start', 'RePlay Update', '/min', ...psArgs],
       mode: ProcessStartMode.detached,
     );
   } else {
