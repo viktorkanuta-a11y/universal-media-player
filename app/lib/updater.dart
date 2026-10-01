@@ -214,6 +214,8 @@ Future<void> _startHelper(String zip, String temp) async {
       'cmd.exe',
       ['/c', 'start', 'RePlay Update', '/min', ...psArgs],
       mode: ProcessStartMode.detached,
+      // Не папка программы: рабочая папка процесса не даёт её переименовать
+      workingDirectory: temp,
     );
   } else {
     final app = exe.parent.parent.parent.path; // .../RePlay.app
@@ -233,18 +235,39 @@ param([int]$AppPid, [string]$Zip, [string]$AppDir, [string]$Temp)
 $ErrorActionPreference = 'Stop'
 $log = Join-Path $Temp 'update.log'
 function Log($t) { Add-Content -Path $log -Value ("{0:HH:mm:ss} {1}" -f (Get-Date), $t) }
+# Свою рабочую папку уводим из папки программы: из неё её не переименовать
+Set-Location -Path $Temp
+$old = "$AppDir-old"
+$newDir = $null
+function Held() {
+  try {
+    $n = Get-Process -ErrorAction SilentlyContinue |
+      Where-Object { $_.Path -and $_.Path -like "$AppDir\*" } |
+      ForEach-Object { "$($_.ProcessName) ($($_.Id))" }
+    if ($n) { return ($n -join ', ') } else { return 'нет' }
+  } catch { return 'не удалось узнать' }
+}
+function Rename-Retry($path, $newName) {
+  for ($i = 1; $i -le 15; $i++) {
+    try { Rename-Item -Path $path -NewName $newName -ErrorAction Stop; return }
+    catch {
+      Log "переименование, попытка $i из 15: $_ | процессы из папки: $(Held)"
+      Start-Sleep -Seconds 2
+    }
+  }
+  throw 'папка занята после 15 попыток (30 с)'
+}
 try {
   Wait-Process -Id $AppPid -Timeout 60 -ErrorAction SilentlyContinue
   Start-Sleep -Seconds 1
   $parent = Split-Path $AppDir -Parent
-  $old = "$AppDir-old"
   $unz = Join-Path $Temp 'new'
   Expand-Archive -Path $Zip -DestinationPath $unz -Force
   $newSrc = Get-ChildItem -Path $unz -Directory | Select-Object -First 1
   if (-not $newSrc) { throw 'в архиве нет папки программы' }
   $newDir = Join-Path $parent $newSrc.Name
   if (Test-Path $old) { Remove-Item $old -Recurse -Force }
-  Rename-Item -Path $AppDir -NewName (Split-Path $old -Leaf)
+  Rename-Retry $AppDir (Split-Path $old -Leaf)
   Log "старая -> $old"
   if (Test-Path $newDir) { Remove-Item $newDir -Recurse -Force }
   Move-Item -Path $newSrc.FullName -Destination $newDir
