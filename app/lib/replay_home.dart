@@ -27,6 +27,7 @@ class _ReplayHomeState extends State<ReplayHome> {
 
   int _selected = 0;
   double _quality = 0.6;
+  bool _fast = false; // «Бережно» при каждом запуске программы
   final TextEditingController _width = TextEditingController();
   final TextEditingController _height = TextEditingController();
 
@@ -169,6 +170,30 @@ class _ReplayHomeState extends State<ReplayHome> {
             activeColor: _coral,
             onChanged: (value) => setState(() => _quality = value),
           ),
+          const SizedBox(height: 12),
+          const Text('Нагрузка', style: _labelStyle),
+          const SizedBox(height: 8),
+          SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment(value: false, label: Text('Бережно')),
+              ButtonSegment(value: true, label: Text('Быстрее')),
+            ],
+            selected: {_fast},
+            showSelectedIcon: false,
+            style: SegmentedButton.styleFrom(
+              selectedBackgroundColor: const Color(0x33E8664A),
+              selectedForegroundColor: _violet,
+            ),
+            onSelectionChanged: (value) => setState(() => _fast = value.first),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _fast
+                ? 'Быстрее, но компьютер сильнее греется и шумит. '
+                    'На ноутбуке лучше «Бережно».'
+                : 'Спокойная нагрузка: дольше, зато компьютер не перегружается.',
+            style: const TextStyle(fontSize: 12, color: Colors.black54),
+          ),
           const SizedBox(height: 20),
           SizedBox(
             height: 52,
@@ -177,7 +202,13 @@ class _ReplayHomeState extends State<ReplayHome> {
                 backgroundColor: _coral,
                 shape: const StadiumBorder(),
               ),
-              onPressed: () => runUpscale(context, _width.text, _height.text, _quality),
+              onPressed: () => runUpscale(
+                context,
+                _width.text,
+                _height.text,
+                _quality,
+                fast: _fast,
+              ),
               child: const Text('Запустить', style: TextStyle(fontSize: 18)),
             ),
           ),

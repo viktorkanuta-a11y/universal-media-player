@@ -33,13 +33,14 @@ void stopUpscale() {
   _engine = null;
 }
 
-/// Запуск увеличения
+/// Запуск увеличения. fast=false — «Бережно» (по умолчанию), fast=true — «Быстрее»
 Future<void> runUpscale(
   BuildContext context,
   String widthText,
   String heightText,
-  double quality,
-) async {
+  double quality, {
+  bool fast = false,
+}) async {
   final input = _selectedPath;
   if (input == null) {
     _message(context, 'Сначала нажми на зону и выбери картинку');
@@ -112,14 +113,17 @@ Future<void> runUpscale(
 
     if (k > 4) {
       status.value = 'Проход 1 из 2 · нужен размер $targetW×$targetH px';
-      current = await _engineRun(current, '${temp.path}/p1.png', status, 1, 2);
+      current =
+          await _engineRun(current, '${temp.path}/p1.png', status, 1, 2, fast);
       current = await _resize(current, '${temp.path}/p1_fit.png',
           (targetW / 4).round(), (targetH / 4).round());
       status.value = 'Проход 2 из 2';
-      current = await _engineRun(current, '${temp.path}/p2.png', status, 2, 2);
+      current =
+          await _engineRun(current, '${temp.path}/p2.png', status, 2, 2, fast);
     } else if (k > 1) {
       status.value = 'Увеличиваю · нужен размер $targetW×$targetH px';
-      current = await _engineRun(current, '${temp.path}/p1.png', status, 1, 1);
+      current =
+          await _engineRun(current, '${temp.path}/p1.png', status, 1, 1, fast);
     }
 
     status.value = 'Подгоняю под размер печати';
@@ -171,6 +175,44 @@ double _scale((int, int) src, String w, String h, int dpi) {
   return need;
 }
 
+/// Ключи движка.
+/// «Быстрее» — как в 0.3.5: куски по 64, потоки по умолчанию.
+/// «Бережно» — куски по 32 (короче работа за раз) и по одному потоку
+/// на загрузку, расчёт и сохранение.
+List<String> engineArgs(
+  String input,
+  String output,
+  String modelsDir, {
+  required bool fast,
+}) =>
+    [
+      '-i', input, '-o', output,
+      '-n', 'realesrgan-x4plus', '-s', '4', '-m', modelsDir,
+      if (fast) ...['-t', '64'] else ...['-t', '32', '-j', '1:1:1'],
+    ];
+
+/// Windows: процесс движка работает с приоритетом «ниже обычного»,
+/// чтобы уступать другим программам, если компьютер уже занят
+void _lowerPriority(int pid) {
+  try {
+    final kernel32 = DynamicLibrary.open('kernel32.dll');
+    final openProcess = kernel32.lookupFunction<
+        IntPtr Function(Uint32, Int32, Uint32),
+        int Function(int, int, int)>('OpenProcess');
+    final setPriorityClass = kernel32.lookupFunction<
+        Int32 Function(IntPtr, Uint32),
+        int Function(int, int)>('SetPriorityClass');
+    final closeHandle = kernel32
+        .lookupFunction<Int32 Function(IntPtr), int Function(int)>('CloseHandle');
+    final handle = openProcess(0x0200, 0, pid); // PROCESS_SET_INFORMATION
+    if (handle == 0) return;
+    setPriorityClass(handle, 0x00004000); // BELOW_NORMAL_PRIORITY_CLASS
+    closeHandle(handle);
+  } catch (_) {
+    // не вышло — работаем с обычным приоритетом
+  }
+}
+
 /// Один прогон движка x4 с процентами
 Future<String> _engineRun(
   String input,
@@ -178,17 +220,22 @@ Future<String> _engineRun(
   ValueNotifier<String> status,
   int pass,
   int total,
+  bool fast,
 ) async {
   final dir = _engineDir();
   final exe = Platform.isWindows
       ? '$dir/realesrgan-ncnn-vulkan.exe'
       : '$dir/realesrgan-ncnn-vulkan';
+  final args = engineArgs(input, output, '$dir/models', fast: fast);
 
-  final process = await Process.start(exe, [
-    '-i', input, '-o', output,
-    '-n', 'realesrgan-x4plus', '-s', '4', '-m', '$dir/models',
-    '-t', '64', // маленькими кусками — видеокарта не захлёбывается
-  ]);
+  final Process process;
+  if (!fast && Platform.isMacOS) {
+    // Mac: «nice» запускает движок с пониженным приоритетом (тот же процесс)
+    process = await Process.start('nice', ['-n', '10', exe, ...args]);
+  } else {
+    process = await Process.start(exe, args);
+    if (!fast && Platform.isWindows) _lowerPriority(process.pid);
+  }
   _engine = process;
 
   final log = StringBuffer();
