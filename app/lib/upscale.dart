@@ -166,6 +166,8 @@ class _Plan {
     required this.smallW,
     required this.smallH,
     required this.sourceMp,
+    required this.srcW,
+    required this.srcH,
     required this.text,
   });
 
@@ -177,6 +179,8 @@ class _Plan {
   final int smallW; // «Улучшить»: размер уменьшенной копии
   final int smallH;
   final double sourceMp;
+  final int srcW;
+  final int srcH;
   final String text;
 
   String get title => enhance ? 'Улучшить — что будет' : 'Увеличить — что будет';
@@ -253,6 +257,8 @@ _Plan _planUpscale(ImgInfo info, String wText, String hText, int dpi) {
     smallW: 0,
     smallH: 0,
     sourceMp: info.mp,
+    srcW: info.w,
+    srcH: info.h,
     text: b.toString().trimRight(),
   );
 }
@@ -283,6 +289,8 @@ _Plan _planEnhance(ImgInfo info) {
     smallW: sw,
     smallH: sh,
     sourceMp: info.mp,
+    srcW: info.w,
+    srcH: info.h,
     text: b.toString().trimRight(),
   );
 }
@@ -290,7 +298,10 @@ _Plan _planEnhance(ImgInfo info) {
 class _Opts {
   _Opts(this.anime);
   bool anime;
-  int place = 0; // какой по контрастности кусок берём для теста
+  int place = 0; // какой по контрастности фрагмент берём для теста
+  double? fx; // выбранный вручную фрагмент: центр, доли ширины и высоты
+  double? fy;
+  int size = 192; // размер фрагмента, px на входе нейросети
 }
 
 class _TestResult {
@@ -417,16 +428,21 @@ Future<bool> _confirm(BuildContext context, _Plan plan, String input,
             onPressed: () => Navigator.of(d).pop('cancel'),
             child: const Text('Отмена'),
           ),
+          if (plan.passes > 0)
+            TextButton(
+              onPressed: () => Navigator.of(d).pop('pick'),
+              child: const Text('Выбрать фрагмент'),
+            ),
           if (plan.passes > 0 && shown != null)
             TextButton(
               onPressed: () => Navigator.of(d).pop('place'),
-              child: const Text('Другое место'),
+              child: const Text('Другой фрагмент'),
             ),
           if (plan.passes > 0)
             TextButton(
               onPressed: () => Navigator.of(d).pop(shown == null ? 'test' : 'model'),
               child: Text(shown == null
-                  ? 'Тест 10 сек'
+                  ? 'Тест (авто)'
                   : 'Тест: ${opts.anime ? 'Фото' : 'Рисунок'}'),
             ),
           FilledButton(
@@ -437,11 +453,23 @@ Future<bool> _confirm(BuildContext context, _Plan plan, String input,
       ),
     );
     if (action == 'go') return true;
-    if (!['test', 'place', 'model'].contains(action) || !context.mounted) {
+    if (!['test', 'place', 'model', 'pick'].contains(action) ||
+        !context.mounted) {
       return false;
     }
     if (action == 'model') opts.anime = !opts.anime; // другая модель
-    if (action == 'place') opts.place++; // другое место
+    if (action == 'place') {
+      opts.fx = null; // снова автоподбор, следующее по деталям место
+      opts.fy = null;
+      opts.place++;
+    }
+    if (action == 'pick') {
+      final got = await _pickFragment(context, input, plan, opts);
+      if (got == null || !context.mounted) continue; // передумал — назад
+      opts.fx = got.$1;
+      opts.fy = got.$2;
+      opts.size = got.$3;
+    }
     test = await _runTest(context, plan, input, temp, fast, opts) ?? shown;
     if (!context.mounted) return false;
   }
@@ -458,8 +486,17 @@ List<Widget> _testWidgets(_TestResult t, _Plan plan) {
           Text(label, style: const TextStyle(fontSize: 12)),
         ],
       );
+  final where = t.place < 0
+      ? 'выбранном фрагменте'
+      : 'фрагменте №${t.place + 1} (самые мелкие детали)';
   return [
-    const SizedBox(height: 16),
+    const SizedBox(height: 12),
+    Text(
+      'Тест: ${t.sec.toStringAsFixed(1)} с на $where ${t.fw}×${t.fh} px.\n'
+      'Вся работа: ${_duration(total)} (грубо: в тест входит запуск '
+      'движка, реальный проход может идти иначе).',
+    ),
+    const SizedBox(height: 12),
     Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
@@ -467,13 +504,6 @@ List<Widget> _testWidgets(_TestResult t, _Plan plan) {
         pic(t.after, 'После (${t.anime ? 'Рисунок' : 'Фото'})',
             FilterQuality.medium),
       ],
-    ),
-    const SizedBox(height: 12),
-    Text(
-      'Тест: ${t.sec.toStringAsFixed(1)} с на кусочке №${t.place + 1} '
-      '(самые мелкие детали) ${t.fw}×${t.fh} px.\n'
-      'Вся работа: ${_duration(total)} (грубо: в тест входит запуск '
-      'движка, реальный проход может идти иначе).',
     ),
   ];
 }
@@ -518,9 +548,9 @@ List<Widget> _testWidgets(_TestResult t, _Plan plan) {
   return (pick.$1, pick.$2);
 }
 
-/// Кусочек с самыми мелкими деталями (для «Улучшить» — из уменьшенной копии)
+/// Фрагмент с самыми мелкими деталями (для «Улучшить» — из уменьшенной копии)
 Future<(String, int, int)> _makeFragment(
-    String input, String out, _Plan plan, int place) async {
+    String input, String out, _Plan plan, _Opts opts) async {
   final bytes = await File(input).readAsBytes();
   int? tw;
   int? th;
@@ -538,16 +568,23 @@ Future<(String, int, int)> _makeFragment(
       targetWidth: tw, targetHeight: th);
   final frame = await codec.getNextFrame();
   final img = frame.image;
-  final cw = math.min(160, img.width);
-  final ch = math.min(160, img.height);
+  final want = opts.fx != null ? opts.size : 160;
+  final cw = math.min(want, img.width);
+  final ch = math.min(want, img.height);
   var left = (img.width - cw) ~/ 2;
   var top = (img.height - ch) ~/ 2;
-  final raw = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
-  if (raw != null) {
-    final at = _pickPlace(raw.buffer.asUint8List(), img.width, img.height,
-        cw, ch, place);
-    left = at.$1;
-    top = at.$2;
+  if (opts.fx != null && opts.fy != null) {
+    // выбранное вручную место
+    left = (opts.fx! * img.width - cw / 2).round().clamp(0, img.width - cw).toInt();
+    top = (opts.fy! * img.height - ch / 2).round().clamp(0, img.height - ch).toInt();
+  } else {
+    final raw = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (raw != null) {
+      final at = _pickPlace(raw.buffer.asUint8List(), img.width, img.height,
+          cw, ch, opts.place);
+      left = at.$1;
+      top = at.$2;
+    }
   }
   final rec = ui.PictureRecorder();
   final canvas = ui.Canvas(rec);
@@ -562,9 +599,154 @@ Future<(String, int, int)> _makeFragment(
   final data = await crop.toByteData(format: ui.ImageByteFormat.png);
   img.dispose();
   crop.dispose();
-  if (data == null) throw Exception('Не получилось вырезать кусочек');
+  if (data == null) throw Exception('Не получилось вырезать фрагмент');
   await File(out).writeAsBytes(data.buffer.asUint8List());
   return (out, cw, ch);
+}
+
+/// Ширина (в пикселях входа нейросети), в которой измеряется размер фрагмента
+double _baseWidth(_Plan plan) {
+  if (plan.enhance) return plan.smallW.toDouble();
+  if (plan.sourceMp > 20) {
+    return plan.srcW >= plan.srcH
+        ? 4096.0
+        : 4096.0 * plan.srcW / plan.srcH;
+  }
+  return plan.srcW.toDouble();
+}
+
+/// Окно «Выбери фрагмент»: картинка целиком, нажми на нужное место
+Future<(double, double, int)?> _pickFragment(
+    BuildContext context, String input, _Plan plan, _Opts opts) async {
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => const AlertDialog(
+      content: Row(
+        children: [
+          CircularProgressIndicator(),
+          SizedBox(width: 20),
+          Expanded(child: Text('Готовлю картинку для выбора…')),
+        ],
+      ),
+    ),
+  );
+  void close() {
+    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+  }
+
+  Uint8List png;
+  double pw;
+  double ph;
+  try {
+    final codec = await ui.instantiateImageCodec(
+        await File(input).readAsBytes(),
+        targetWidth: 900);
+    final frame = await codec.getNextFrame();
+    final prev = frame.image;
+    pw = prev.width.toDouble();
+    ph = prev.height.toDouble();
+    final data = await prev.toByteData(format: ui.ImageByteFormat.png);
+    prev.dispose();
+    if (data == null) throw Exception('нет картинки');
+    png = data.buffer.asUint8List();
+  } catch (e) {
+    close();
+    if (context.mounted) {
+      await _error(context, 'Не получилось показать картинку для выбора');
+    }
+    return null;
+  }
+  close();
+  if (!context.mounted) return null;
+
+  final dispW = math.min(640.0, 360.0 * pw / ph);
+  final dispH = dispW * ph / pw;
+  final base = _baseWidth(plan);
+  var fx = opts.fx ?? 0.5;
+  var fy = opts.fy ?? 0.5;
+  var size = opts.size;
+
+  return showDialog<(double, double, int)>(
+    context: context,
+    barrierDismissible: false,
+    builder: (d) => StatefulBuilder(
+      builder: (_, setState) {
+        final rw = math.min(size / base * dispW, dispW);
+        final rh = math.min(size / base * dispW, dispH);
+        final left = (fx * dispW - rw / 2).clamp(0.0, dispW - rw).toDouble();
+        final top = (fy * dispH - rh / 2).clamp(0.0, dispH - rh).toDouble();
+        void move(Offset p) => setState(() {
+              fx = (p.dx / dispW).clamp(0.0, 1.0).toDouble();
+              fy = (p.dy / dispH).clamp(0.0, 1.0).toDouble();
+            });
+        return AlertDialog(
+          title: const Text('Выбери фрагмент'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Нажми на картинку там, где нужно проверить '
+                    '(текст, край, небо). Рамка — это фрагмент.'),
+                const SizedBox(height: 12),
+                GestureDetector(
+                  onTapDown: (e) => move(e.localPosition),
+                  onPanUpdate: (e) => move(e.localPosition),
+                  child: SizedBox(
+                    width: dispW,
+                    height: dispH,
+                    child: Stack(
+                      children: [
+                        Image.memory(png,
+                            width: dispW,
+                            height: dispH,
+                            fit: BoxFit.fill,
+                            filterQuality: FilterQuality.medium),
+                        Positioned(
+                          left: left,
+                          top: top,
+                          child: Container(
+                            width: rw,
+                            height: rh,
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.red, width: 2),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text('Размер фрагмента, px (больше — дольше тест):'),
+                const SizedBox(height: 6),
+                SegmentedButton<int>(
+                  segments: [
+                    for (final n in [128, 192, 256, 384])
+                      ButtonSegment(value: n, label: Text('$n')),
+                  ],
+                  selected: {size},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (v) => setState(() => size = v.first),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(d).pop(),
+              child: const Text('Назад'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(d).pop((fx, fy, size)),
+              child: const Text('Тест на этом фрагменте'),
+            ),
+          ],
+        );
+      },
+    ),
+  );
 }
 
 Future<_TestResult?> _runTest(BuildContext context, _Plan plan, String input,
@@ -578,7 +760,7 @@ Future<_TestResult?> _runTest(BuildContext context, _Plan plan, String input,
         children: [
           CircularProgressIndicator(),
           SizedBox(width: 20),
-          Expanded(child: Text('Тест на маленьком кусочке…')),
+          Expanded(child: Text('Тест на маленьком фрагменте…')),
         ],
       ),
     ),
@@ -588,16 +770,17 @@ Future<_TestResult?> _runTest(BuildContext context, _Plan plan, String input,
   }
 
   try {
-    final frag = await _makeFragment(input, '${temp.path}/frag${opts.place}.png', plan, opts.place);
+    final frag = await _makeFragment(input, '${temp.path}/frag${DateTime.now().microsecondsSinceEpoch}.png', plan, opts);
     final tag = opts.anime ? 'anime' : 'photo';
-    final after = '${temp.path}/frag${opts.place}_$tag.png';
+    final stamp = DateTime.now().microsecondsSinceEpoch;
+    final after = '${temp.path}/frag${stamp}_$tag.png';
     final sw = Stopwatch()..start();
     await _engineRun(frag.$1, after, ValueNotifier<String>(''), 1, 1, fast,
         opts.anime);
     sw.stop();
     close();
     return _TestResult(frag.$1, after, sw.elapsedMilliseconds / 1000,
-        frag.$2, frag.$3, opts.anime, opts.place);
+        frag.$2, frag.$3, opts.anime, opts.fx != null ? -1 : opts.place);
   } catch (e) {
     close();
     if (!_canceled && context.mounted) {
