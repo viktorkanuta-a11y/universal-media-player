@@ -290,10 +290,13 @@ _Plan _planEnhance(ImgInfo info) {
 class _Opts {
   _Opts(this.anime);
   bool anime;
+  int place = 0; // какой по контрастности кусок берём для теста
 }
 
 class _TestResult {
-  _TestResult(this.before, this.after, this.sec, this.fw, this.fh, this.anime);
+  _TestResult(this.before, this.after, this.sec, this.fw, this.fh, this.anime,
+      this.place);
+  final int place;
   final String before;
   final String after;
   final double sec;
@@ -395,6 +398,15 @@ Future<bool> _confirm(BuildContext context, _Plan plan, String input,
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(plan.text),
+                if (plan.passes > 0) ...[
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Долгая работа сильно нагружает видеокарту и греет '
+                    'компьютер. На ноутбуке и MacBook — «Бережно» и '
+                    'питание от розетки.',
+                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                ],
                 if (shown != null) ..._testWidgets(shown, plan),
               ],
             ),
@@ -405,9 +417,14 @@ Future<bool> _confirm(BuildContext context, _Plan plan, String input,
             onPressed: () => Navigator.of(d).pop('cancel'),
             child: const Text('Отмена'),
           ),
+          if (plan.passes > 0 && shown != null)
+            TextButton(
+              onPressed: () => Navigator.of(d).pop('place'),
+              child: const Text('Другое место'),
+            ),
           if (plan.passes > 0)
             TextButton(
-              onPressed: () => Navigator.of(d).pop('test'),
+              onPressed: () => Navigator.of(d).pop(shown == null ? 'test' : 'model'),
               child: Text(shown == null
                   ? 'Тест 10 сек'
                   : 'Тест: ${opts.anime ? 'Фото' : 'Рисунок'}'),
@@ -420,8 +437,11 @@ Future<bool> _confirm(BuildContext context, _Plan plan, String input,
       ),
     );
     if (action == 'go') return true;
-    if (action != 'test' || !context.mounted) return false;
-    if (shown != null) opts.anime = !opts.anime; // другая модель
+    if (!['test', 'place', 'model'].contains(action) || !context.mounted) {
+      return false;
+    }
+    if (action == 'model') opts.anime = !opts.anime; // другая модель
+    if (action == 'place') opts.place++; // другое место
     test = await _runTest(context, plan, input, temp, fast, opts) ?? shown;
     if (!context.mounted) return false;
   }
@@ -450,17 +470,57 @@ List<Widget> _testWidgets(_TestResult t, _Plan plan) {
     ),
     const SizedBox(height: 12),
     Text(
-      'Тест: ${t.sec.toStringAsFixed(1)} с на кусочке из центра '
-      '${t.fw}×${t.fh} px.\n'
-      'Вся работа ≈ ${_duration(total)} (грубо: в тест входит запуск '
+      'Тест: ${t.sec.toStringAsFixed(1)} с на кусочке №${t.place + 1} '
+      '(самые мелкие детали) ${t.fw}×${t.fh} px.\n'
+      'Вся работа: ${_duration(total)} (грубо: в тест входит запуск '
       'движка, реальный проход может идти иначе).',
     ),
   ];
 }
 
-/// Кусочек из центра картинки (для «Улучшить» — из уменьшенной копии)
+/// Где больше всего мелких деталей (текст, края): перебираем места
+/// по сетке и берём place-е по контрастности, не пересекающееся с лучшими.
+(int, int) _pickPlace(Uint8List px, int w, int h, int cw, int ch, int place) {
+  const gap = 4;
+  final stepX = math.max(1, cw ~/ 2);
+  final stepY = math.max(1, ch ~/ 2);
+  int luma(int x, int y) {
+    final i = (y * w + x) * 4;
+    return (px[i] * 3 + px[i + 1] * 6 + px[i + 2]) ~/ 10;
+  }
+
+  final cands = <(int, int, int)>[]; // x, y, оценка деталей
+  for (var y = 0; y + ch <= h; y += stepY) {
+    for (var x = 0; x + cw <= w; x += stepX) {
+      var score = 0;
+      for (var yy = y; yy + gap < y + ch; yy += gap) {
+        for (var xx = x; xx + gap < x + cw; xx += gap) {
+          final l = luma(xx, yy);
+          score += (l - luma(xx + gap, yy)).abs() +
+              (l - luma(xx, yy + gap)).abs();
+        }
+      }
+      cands.add((x, y, score));
+    }
+  }
+  if (cands.isEmpty) return ((w - cw) ~/ 2, (h - ch) ~/ 2);
+  cands.sort((a, b) => b.$3.compareTo(a.$3));
+  final chosen = <(int, int, int)>[];
+  for (final c in cands) {
+    final apart = chosen.every(
+        (o) => (o.$1 - c.$1).abs() >= cw || (o.$2 - c.$2).abs() >= ch);
+    if (apart) {
+      chosen.add(c);
+      if (chosen.length > place) break;
+    }
+  }
+  final pick = chosen[place % chosen.length];
+  return (pick.$1, pick.$2);
+}
+
+/// Кусочек с самыми мелкими деталями (для «Улучшить» — из уменьшенной копии)
 Future<(String, int, int)> _makeFragment(
-    String input, String out, _Plan plan) async {
+    String input, String out, _Plan plan, int place) async {
   final bytes = await File(input).readAsBytes();
   int? tw;
   int? th;
@@ -480,12 +540,21 @@ Future<(String, int, int)> _makeFragment(
   final img = frame.image;
   final cw = math.min(160, img.width);
   final ch = math.min(160, img.height);
+  var left = (img.width - cw) ~/ 2;
+  var top = (img.height - ch) ~/ 2;
+  final raw = await img.toByteData(format: ui.ImageByteFormat.rawRgba);
+  if (raw != null) {
+    final at = _pickPlace(raw.buffer.asUint8List(), img.width, img.height,
+        cw, ch, place);
+    left = at.$1;
+    top = at.$2;
+  }
   final rec = ui.PictureRecorder();
   final canvas = ui.Canvas(rec);
   canvas.drawImageRect(
     img,
-    ui.Rect.fromLTWH((img.width - cw) / 2, (img.height - ch) / 2,
-        cw.toDouble(), ch.toDouble()),
+    ui.Rect.fromLTWH(
+        left.toDouble(), top.toDouble(), cw.toDouble(), ch.toDouble()),
     ui.Rect.fromLTWH(0, 0, cw.toDouble(), ch.toDouble()),
     ui.Paint(),
   );
@@ -519,16 +588,16 @@ Future<_TestResult?> _runTest(BuildContext context, _Plan plan, String input,
   }
 
   try {
-    final frag = await _makeFragment(input, '${temp.path}/frag.png', plan);
+    final frag = await _makeFragment(input, '${temp.path}/frag${opts.place}.png', plan, opts.place);
     final tag = opts.anime ? 'anime' : 'photo';
-    final after = '${temp.path}/frag_$tag.png';
+    final after = '${temp.path}/frag${opts.place}_$tag.png';
     final sw = Stopwatch()..start();
     await _engineRun(frag.$1, after, ValueNotifier<String>(''), 1, 1, fast,
         opts.anime);
     sw.stop();
     close();
     return _TestResult(frag.$1, after, sw.elapsedMilliseconds / 1000,
-        frag.$2, frag.$3, opts.anime);
+        frag.$2, frag.$3, opts.anime, opts.place);
   } catch (e) {
     close();
     if (!_canceled && context.mounted) {
