@@ -1,3 +1,4 @@
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 
 import 'feedback_button.dart';
@@ -26,8 +27,10 @@ class _ReplayHomeState extends State<ReplayHome> {
   ];
 
   int _selected = 0;
-  double _quality = 0.6;
+  double _dpi = 200; // плотность печати: 100…300 dpi
   bool _fast = false; // «Бережно» при каждом запуске программы
+  bool _anime = false; // модель: false — Фото, true — Рисунок
+  bool _dragging = false;
   final TextEditingController _width = TextEditingController();
   final TextEditingController _height = TextEditingController();
 
@@ -107,9 +110,9 @@ class _ReplayHomeState extends State<ReplayHome> {
     );
   }
 
-  // Центр: зона для картинки
+  // Центр: зона для картинки (Увеличить и Улучшить)
   Widget _buildCenter() {
-    if (_selected != 0) {
+    if (_selected > 1) {
       return Center(
         child: Text(
           'Раздел «${_sections[_selected]}» — скоро',
@@ -117,29 +120,62 @@ class _ReplayHomeState extends State<ReplayHome> {
         ),
       );
     }
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(40),
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: () => pickImage(context),
-            child: CustomPaint(
-              painter: _DashedBorderPainter(color: _coral),
-              child: const SizedBox(
-                width: 520,
-                height: 340,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      'Перетащи картинку сюда',
-                      style: TextStyle(fontSize: 22, color: Colors.black87),
+    return DropTarget(
+      onDragEntered: (_) => setState(() => _dragging = true),
+      onDragExited: (_) => setState(() => _dragging = false),
+      onDragDone: (detail) {
+        setState(() => _dragging = false);
+        if (detail.files.isEmpty) return;
+        selectImage(context, detail.files.first.path);
+      },
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(40),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () => pickImage(context),
+              child: CustomPaint(
+                painter: _DashedBorderPainter(
+                  color: _dragging ? _violet : _coral,
+                ),
+                child: SizedBox(
+                  width: 520,
+                  height: 340,
+                  child: ValueListenableBuilder<String?>(
+                    valueListenable: selectedInfo,
+                    builder: (_, info, __) => Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            info == null
+                                ? 'Перетащи картинку сюда'
+                                : 'Картинка выбрана',
+                            style: const TextStyle(
+                                fontSize: 22, color: Colors.black87),
+                          ),
+                          const SizedBox(height: 16),
+                          Icon(
+                            info == null
+                                ? Icons.upload_outlined
+                                : Icons.image_outlined,
+                            size: 48,
+                            color: Colors.black87,
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            info ?? 'или нажми и выбери файл (jpg, png, webp)',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                                fontSize: 14, color: Colors.black54),
+                          ),
+                        ],
+                      ),
                     ),
-                    SizedBox(height: 16),
-                    Icon(Icons.upload_outlined, size: 48, color: Colors.black87),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -151,73 +187,134 @@ class _ReplayHomeState extends State<ReplayHome> {
 
   // Правая панель настроек
   Widget _buildSettings() {
+    final enhance = _selected == 1;
     return Container(
       width: 280,
       color: Colors.white,
       padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text('Размер печати, м', style: _labelStyle),
-          const SizedBox(height: 10),
-          _field(_width, 'Ширина'),
-          const SizedBox(height: 12),
-          _field(_height, 'Высота'),
-          const SizedBox(height: 28),
-          const Text('Качество', style: _labelStyle),
-          Slider(
-            value: _quality,
-            activeColor: _coral,
-            onChanged: (value) => setState(() => _quality = value),
-          ),
-          const SizedBox(height: 12),
-          const Text('Нагрузка', style: _labelStyle),
-          const SizedBox(height: 8),
-          SegmentedButton<bool>(
-            segments: const [
-              ButtonSegment(value: false, label: Text('Бережно')),
-              ButtonSegment(value: true, label: Text('Быстрее')),
+      child: SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 600),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (_selected > 1)
+                const Text('Скоро', style: _labelStyle)
+              else ...[
+                if (enhance) ...[
+                  const Text(
+                    'Улучшает чёткость, размер файла почти не меняется.',
+                    style: TextStyle(fontSize: 13, color: Colors.black54),
+                  ),
+                ] else ...[
+                  const Text('Размер печати, м', style: _labelStyle),
+                  const SizedBox(height: 10),
+                  _field(_width, 'Ширина'),
+                  const SizedBox(height: 12),
+                  _field(_height, 'Высота'),
+                  const SizedBox(height: 24),
+                  Text('Качество печати: ${_dpi.round()} dpi',
+                      style: _labelStyle),
+                  Slider(
+                    value: _dpi,
+                    min: 100,
+                    max: 300,
+                    divisions: 8,
+                    label: '${_dpi.round()} dpi',
+                    activeColor: _coral,
+                    onChanged: (value) => setState(() => _dpi = value),
+                  ),
+                  const Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('100', style: TextStyle(fontSize: 12)),
+                      Text('200', style: TextStyle(fontSize: 12)),
+                      Text('300', style: TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'dpi — сколько точек на дюйм печати. Больше — '
+                    'чётче вблизи, но картинка увеличивается сильнее '
+                    'и обработка дольше. Влево — меньше пикселей, '
+                    'быстрее.',
+                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                ],
+                const SizedBox(height: 20),
+                const Text('Модель', style: _labelStyle),
+                const SizedBox(height: 8),
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('Фото')),
+                    ButtonSegment(value: true, label: Text('Рисунок')),
+                  ],
+                  selected: {_anime},
+                  showSelectedIcon: false,
+                  style: SegmentedButton.styleFrom(
+                    selectedBackgroundColor: const Color(0x33E8664A),
+                    selectedForegroundColor: _violet,
+                  ),
+                  onSelectionChanged: (value) =>
+                      setState(() => _anime = value.first),
+                ),
+                const SizedBox(height: 20),
+                const Text('Нагрузка', style: _labelStyle),
+                const SizedBox(height: 8),
+                SegmentedButton<bool>(
+                  segments: const [
+                    ButtonSegment(value: false, label: Text('Бережно')),
+                    ButtonSegment(value: true, label: Text('Быстрее')),
+                  ],
+                  selected: {_fast},
+                  showSelectedIcon: false,
+                  style: SegmentedButton.styleFrom(
+                    selectedBackgroundColor: const Color(0x33E8664A),
+                    selectedForegroundColor: _violet,
+                  ),
+                  onSelectionChanged: (value) =>
+                      setState(() => _fast = value.first),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _fast
+                      ? 'Быстрее, но компьютер сильнее греется и шумит. '
+                          'На ноутбуке лучше «Бережно».'
+                      : 'Спокойная нагрузка: дольше, зато компьютер не '
+                          'перегружается.',
+                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  height: 52,
+                  child: FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _coral,
+                      shape: const StadiumBorder(),
+                    ),
+                    onPressed: () => enhance
+                        ? runEnhance(context, fast: _fast, anime: _anime)
+                        : runUpscale(
+                            context,
+                            _width.text,
+                            _height.text,
+                            _dpi.round(),
+                            fast: _fast,
+                            anime: _anime,
+                          ),
+                    child: const Text('Запустить',
+                        style: TextStyle(fontSize: 18)),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 24),
+              const FittedBox(
+                fit: BoxFit.scaleDown,
+                child: DesignFeedbackButton(),
+              ),
             ],
-            selected: {_fast},
-            showSelectedIcon: false,
-            style: SegmentedButton.styleFrom(
-              selectedBackgroundColor: const Color(0x33E8664A),
-              selectedForegroundColor: _violet,
-            ),
-            onSelectionChanged: (value) => setState(() => _fast = value.first),
           ),
-          const SizedBox(height: 8),
-          Text(
-            _fast
-                ? 'Быстрее, но компьютер сильнее греется и шумит. '
-                    'На ноутбуке лучше «Бережно».'
-                : 'Спокойная нагрузка: дольше, зато компьютер не перегружается.',
-            style: const TextStyle(fontSize: 12, color: Colors.black54),
-          ),
-          const SizedBox(height: 20),
-          SizedBox(
-            height: 52,
-            child: FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: _coral,
-                shape: const StadiumBorder(),
-              ),
-              onPressed: () => runUpscale(
-                context,
-                _width.text,
-                _height.text,
-                _quality,
-                fast: _fast,
-              ),
-              child: const Text('Запустить', style: TextStyle(fontSize: 18)),
-            ),
-          ),
-          const Spacer(),
-          const FittedBox(
-            fit: BoxFit.scaleDown,
-            child: DesignFeedbackButton(),
-          ),
-        ],
+        ),
       ),
     );
   }
